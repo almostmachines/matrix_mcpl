@@ -75,8 +75,30 @@ rooms to encrypted, so create the agent's rooms with encryption explicitly off.
 
 Adding E2EE later means a persistent crypto store (matrix-bot-sdk's
 `RustSdkCryptoStorageProvider`), device identity that must not be lost, and
-history from before the bot joined staying unreadable. It is a bolt-on to the
-adapter, not a rewrite.
+history from before the bot joined staying unreadable — megolm keys are only
+shared with devices present when a message was sent, so a device that joins
+later never gets them. It is a bolt-on to the adapter, not a rewrite.
+
+## History from before the bot joined
+
+Unencrypted, this is a separate question from encryption and usually goes the
+way you want. What the bot can read is set by the room's
+`m.room.history_visibility` state:
+
+| Value | The bot can read… |
+|-------|-------------------|
+| `world_readable` | everything, without even joining |
+| `shared` | all history, including from before it joined (**assumed when the event is absent**) |
+| `invited` | from the moment it was invited |
+| `joined` | only from the moment it joined |
+
+So in a typical room the agent joins and can immediately page back through the
+whole timeline via `fetch_history`, and its first-interaction backscroll covers
+conversation that predates it.
+
+If the agent seems oddly amnesiac about anything before it arrived, check this
+setting before suspecting the server — in Element it is Room Settings →
+Security & Privacy → "Who can read history?".
 
 ## Setup
 
