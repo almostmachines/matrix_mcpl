@@ -80,6 +80,8 @@ export interface MatrixMessageData {
   mentionsBot: boolean;
   /** True when the message carried `m.mentions.room` (the @room broadcast). */
   pingsRoom: boolean;
+  /** True when the sender is a known sibling agent (MATRIX_PEER_AGENTS). */
+  isPeerAgent: boolean;
   isDM: boolean;
   msgtype: string;
   timestamp: Date;
@@ -116,6 +118,10 @@ export interface MatrixAdapterConfig {
   /** Deliver m.notice messages (default false — the convention is that
    *  notices come from other bots, and forwarding them invites bot loops). */
   acceptNotices?: boolean;
+  /** MXIDs of sibling agents sharing rooms with this one. Their messages are
+   *  tagged `chat:from-agent` rather than `chat:from-human` (RFC-001 §Sender),
+   *  so the host can gate on who is speaking. */
+  peerAgents?: string[];
 }
 
 /** Raw Matrix event as it comes off /sync or the history APIs. */
@@ -685,6 +691,7 @@ export class MatrixAdapter {
       // The @room broadcast deliberately doesn't count.
       mentionsBot: mentionsUser(content, this.userId, this.displayName),
       pingsRoom: mentions?.room === true,
+      isPeerAgent: this.config.peerAgents?.includes(event.sender) ?? false,
       isDM,
       msgtype,
       timestamp: new Date(event.origin_server_ts),

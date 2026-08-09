@@ -1049,16 +1049,19 @@ export class MatrixMcplServer {
     }
 
     // MCPL RFC-001 event tags — reserved chat:* core, umbrellas included.
-    // The host's wake gate routes on these. Other bots' notices never get
-    // here (the adapter drops m.notice), so from-human is uniform.
+    // The host's wake gate routes on these.
     const eventTags: string[] = (() => {
       const t = new Set<string>();
       if (msg.mentionsBot) t.add('chat:mention');
       if (msg.isDM) { t.add('chat:dm'); t.add('chat:private'); }
       t.add(isAddressed ? 'chat:addressed' : 'chat:ambient');
-      t.add('chat:from-human');
+      // Sibling agents sharing a room speak in m.text like anyone else, so
+      // the sender class has to come from configuration, not the msgtype.
+      t.add(msg.isPeerAgent ? 'chat:from-agent' : 'chat:from-human');
       if (msg.threadRootId) t.add('chat:thread');
-      if (msg.pingsRoom) t.add('matrix:room-ping');
+      // @room is RFC-001's channel-wide ping; matrix:room-ping is kept as the
+      // platform extension for gates that want to distinguish it.
+      if (msg.pingsRoom) { t.add('chat:broadcast'); t.add('matrix:room-ping'); }
       for (const a of msg.attachments) {
         t.add(a.isImage ? 'chat:has-image' : 'chat:has-file');
       }
@@ -1073,6 +1076,7 @@ export class MatrixMcplServer {
       threadRootId: msg.threadRootId,
       replyToId: msg.replyToId,
       pingsRoom: msg.pingsRoom,
+      isPeerAgent: msg.isPeerAgent,
       msgtype: msg.msgtype,
       server: this.matrix.serverName,
       rawContent: msg.content,

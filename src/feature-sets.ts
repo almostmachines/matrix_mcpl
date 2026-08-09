@@ -16,12 +16,17 @@ export const featureSets: FeatureSetDeclaration[] = [
     tagOntology: {
       coreTags: [
         'chat:addressed', 'chat:mention', 'chat:dm', 'chat:ambient',
-        'chat:private', 'chat:from-human', 'chat:thread',
+        'chat:private', 'chat:broadcast', 'chat:thread',
+        'chat:from-human', 'chat:from-agent',
         'chat:has-image', 'chat:has-file',
       ],
       defaultTreatment: [
         { tagsAny: ['chat:addressed'], behavior: 'immediate' },
         { tagsAny: ['chat:ambient'], behavior: { throttle: { perMs: 120000 } } },
+        // Sibling agents can trade replies faster than any human would; the
+        // throttle is the backstop when their judgement about when to stop
+        // does not hold.
+        { tagsAny: ['chat:from-agent'], behavior: { throttle: { perMs: 60000 } } },
       ],
       // Matrix-specific extensions (e.g. matrix:room-ping for @room) may be
       // emitted; consumers should tolerate undeclared tags.

@@ -24,6 +24,10 @@
  *                             with a room (default 50)
  *   MATRIX_ACCEPT_NOTICES   - Optional: "true" to deliver m.notice messages
  *                             (default: dropped, as they come from other bots)
+ *   MATRIX_PEER_AGENTS      - Optional: comma-separated MXIDs of sibling agents.
+ *                             Their messages are tagged chat:from-agent instead
+ *                             of chat:from-human, so the host can gate on who
+ *                             is speaking.
  *   MATRIX_MCPL_DEBUG_LOG   - Optional: absolute path for a diagnostic file log
  */
 
@@ -78,6 +82,7 @@ async function main(): Promise<void> {
     inviteAllowlist: csv(process.env.MATRIX_INVITE_ALLOWLIST),
     storagePath: process.env.MATRIX_STORAGE_FILE,
     acceptNotices: process.env.MATRIX_ACCEPT_NOTICES === 'true',
+    peerAgents: csv(process.env.MATRIX_PEER_AGENTS),
   });
   const server = new MatrixMcplServer(matrix);
   await matrix.start();

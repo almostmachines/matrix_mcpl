@@ -162,7 +162,63 @@ MATRIX_STORAGE_FILE=./matrix-mcpl-storage.json \
 | `MATRIX_SUBSCRIPTIONS_FILE` | no | JSON file persisting ambient subscriptions across restarts |
 | `MATRIX_BACKSCROLL_LIMIT` | no | Messages fetched on first interaction with a room (default 50) |
 | `MATRIX_ACCEPT_NOTICES` | no | `true` to deliver `m.notice` messages (default: dropped — they come from other bots, and forwarding them invites bot loops) |
+| `MATRIX_PEER_AGENTS` | no | Comma-separated MXIDs of sibling agents; their messages are tagged `chat:from-agent` instead of `chat:from-human` |
 | `MATRIX_MCPL_DEBUG_LOG` | no | Absolute path for a diagnostic file log |
+
+## Running multiple agents
+
+One process per agent, but only one installation — build once and point several
+spawn configs at the same `dist/src/index.js` with different environments. The
+adapter binds a single identity at connect time (one `whoami`, and self-filtering
+and mention detection key off it), so there is no multi-account mode.
+
+**These must differ per agent.** Sharing any of them silently breaks things:
+
+| Variable | Why it cannot be shared |
+|----------|-------------------------|
+| `MATRIX_ACCESS_TOKEN` | One Matrix account per agent. Sharing one makes each agent's self-filter suppress the others' messages |
+| `MATRIX_STORAGE_FILE` | Holds the sync token and filter ID for *one* account; two writers clobber each other's sync position |
+| `MATRIX_SUBSCRIPTIONS_FILE` | Per-agent ambient room subscriptions |
+| `--tcp <port>` | Only when using the TCP transport; stdio has no conflict |
+
+Budget roughly one idle `/sync` long-poll and 50–80MB of Node per agent.
+Separate accounts also help with rate limits, which Synapse buckets per user.
+
+### Agents sharing a room
+
+Sibling agents hear each other by default: the adapter filters only the agent's
+*own* messages, and `send_message` sends `m.text` like any human client. Each
+incoming message is rendered `Name: text` with the author in `metadata` and in
+the `channels/incoming` `author` field, so an agent can see who spoke and decide
+for itself whether to answer.
+
+Two things to set up for this:
+
+1. **Subscribe the shared room.** Ambient (non-mention) messages only flow from
+   subscribed rooms. Mention the agent once in the room and it auto-subscribes
+   permanently, or call `subscribe_room`, or pre-seed `MATRIX_SUBSCRIPTIONS_FILE`
+   with the room ID. Note this is *not* the recipe's `channelSubscription`, which
+   is a host-side concern — both matter, for different reasons.
+2. **List the siblings** in `MATRIX_PEER_AGENTS` on each agent. Their messages
+   are then tagged `chat:from-agent` rather than `chat:from-human`, which is what
+   lets a wake policy treat "another agent said something" differently from "a
+   person said something". Without it every sender looks human to the gate.
+
+**On loops.** Judgement about when to stop is the primary control, and it is
+usually enough — but two agents being polite at each other is a well-known way
+to burn tokens overnight, and it does not need either one to be malfunctioning.
+Two backstops sit under it:
+
+- `chat:ambient` is throttled to one wake per 2 minutes and `chat:from-agent` to
+  one per minute in this server's declared `defaultTreatment`; the host applies
+  these unless a `gate.json` policy overrides them.
+- If a specific pair does start ping-ponging, the cheapest fix is to have their
+  inter-agent traffic use `send_message` with `notice: true` while leaving
+  `MATRIX_ACCEPT_NOTICES` unset — they then cannot hear each other at all, while
+  humans still see everything.
+
+Worth watching the first few multi-agent sessions with `MATRIX_MCPL_DEBUG_LOG`
+set before leaving them running unattended.
 
 ## Connectome recipe
 
