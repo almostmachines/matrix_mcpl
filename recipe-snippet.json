@@ -1,0 +1,27 @@
+{
+  "_comment": "Drop the mcpServers entry into your connectome-host recipe, and the gate policy into _config/gate.json. Replace the absolute path, homeserver URL and room ID.",
+
+  "mcpServers": {
+    "matrix": {
+      "command": "node",
+      "args": ["/absolute/path/to/matrix-mcpl/dist/src/index.js", "--stdio"],
+      "env": {
+        "MATRIX_HOMESERVER_URL": "https://matrix.example.org",
+        "MATRIX_ACCESS_TOKEN": "${MATRIX_ACCESS_TOKEN}",
+        "MATRIX_STORAGE_FILE": "./matrix-mcpl-storage.json",
+        "MATRIX_SUBSCRIPTIONS_FILE": "./matrix-subscriptions.json",
+        "MATRIX_BACKSCROLL_LIMIT": "50"
+      },
+      "channelSubscription": ["matrix:!yourroom:example.org"]
+    }
+  },
+
+  "_gateJsonPolicy": {
+    "name": "matrix-main",
+    "match": {
+      "scope": ["mcpl:channel-incoming"],
+      "channel": "matrix:!yourroom:example.org"
+    },
+    "behavior": "always"
+  }
+}
