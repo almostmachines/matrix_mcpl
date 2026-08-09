@@ -221,6 +221,10 @@ export class MatrixMcplServer {
         this.enabledFeatureSets.add(fs.name);
       }
     }
+    dbg('handshake:complete', {
+      mcplEnabled: this.mcplEnabled,
+      enabledFeatureSets: [...this.enabledFeatureSets],
+    });
   }
 
   // ── Request Dispatch ──
@@ -337,6 +341,11 @@ export class MatrixMcplServer {
         if (p.disabled) {
           for (const name of p.disabled) this.enabledFeatureSets.delete(name);
         }
+        dbg('featureSets:update', {
+          enabled: p.enabled,
+          disabled: p.disabled,
+          now: [...this.enabledFeatureSets],
+        });
         break;
       }
 
@@ -943,7 +952,16 @@ export class MatrixMcplServer {
     });
     if (!conn) return;
     if (!this.mcplEnabled) return; // No push events in MCP-only mode
-    if (!isEnabled('matrix.messaging', this.enabledFeatureSets)) return;
+    if (!isEnabled('matrix.messaging', this.enabledFeatureSets)) {
+      // Silence here is indistinguishable from a broken homeserver from the
+      // outside, so say which feature sets are actually live.
+      dbg('handleMatrixMessage:drop', {
+        reason: 'feature-set-disabled',
+        need: 'matrix.messaging',
+        enabled: [...this.enabledFeatureSets],
+      });
+      return;
+    }
 
     // Direct address (mention or DM) always reaches the agent. Ambient
     // messages only flow from subscribed rooms — otherwise every joined room
