@@ -28,11 +28,15 @@ import {
 import {
   classifyExtension,
   extractMentionedUserIds,
+  fetchAttachmentBytes,
   markdownToMatrixHtml,
   matrixHtmlToText,
+  mediaDownloadUrl,
+  mediaThumbnailUrl,
   mentionsUser,
   stripReplyFallback,
   type AttachmentRef,
+  type FetchedAttachment,
 } from './content.js';
 
 /** Message types that represent real user content. Everything else
@@ -606,6 +610,29 @@ export class MatrixAdapter {
 
   get accessToken(): string {
     return this.config.accessToken;
+  }
+
+  /**
+   * Fetch media bytes by mxc:// URI, streaming with a size cap. Pass
+   * `thumbnail` to get a scaled preview instead of the original — the
+   * homeserver does the scaling, so an oversized original never crosses
+   * the wire.
+   *
+   * The access token goes only to the configured homeserver: media is
+   * addressed by opaque server+id, so there is no attacker-chosen host here
+   * even though the URI arrives inside a message.
+   */
+  async fetchMedia(
+    mxcUrl: string,
+    name: string,
+    opts: { thumbnail?: { width?: number; height?: number } } = {},
+  ): Promise<FetchedAttachment> {
+    const url = opts.thumbnail
+      ? mediaThumbnailUrl(this.config.homeserverUrl, mxcUrl, opts.thumbnail)
+      : mediaDownloadUrl(this.config.homeserverUrl, mxcUrl);
+    return fetchAttachmentBytes(url, name, {
+      headers: { Authorization: `Bearer ${this.config.accessToken}` },
+    });
   }
 
   // ── Incoming events ──

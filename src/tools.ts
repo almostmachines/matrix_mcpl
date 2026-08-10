@@ -210,13 +210,23 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'fetch_attachment',
     description:
-      'Fetch a Matrix media attachment by its mxc:// URI and return its bytes inline: ' +
-      'images as image blocks, text-ish files decoded, other binary as base64. URIs come ' +
-      'from incoming message attachment refs. Max 5MB.',
+      'Fetch a Matrix media attachment by its mxc:// URI. Without saveTo it returns the ' +
+      'bytes inline: images as image blocks, text-ish files decoded, other binary as ' +
+      'base64 — note that an image returned this way is visible for the current turn only, ' +
+      'and is replaced by a placeholder in your history afterwards. With saveTo it writes ' +
+      'the file to disk instead and returns the path, which is the better choice when you ' +
+      'want to keep it. Incoming images already arrive shown in the message itself. Max 5MB.',
     inputSchema: {
       type: 'object',
       properties: {
         mxcUrl: { type: 'string', description: 'The mxc:// URI of the media (mxc://server/mediaId)' },
+        saveTo: {
+          type: 'string',
+          description:
+            'Optional filename (or relative path) to write the file to, under the server\'s ' +
+            'configured save root. Returns the written path instead of the bytes.',
+        },
+        name: { type: 'string', description: 'Optional filename to report; defaults to the media ID' },
       },
       required: ['mxcUrl'],
     },

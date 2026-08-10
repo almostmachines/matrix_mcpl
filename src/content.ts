@@ -64,6 +64,26 @@ export function mediaDownloadUrl(homeserverUrl: string, mxcUrl: string): string 
 }
 
 /**
+ * Build the authenticated thumbnail URL for a piece of media. Used to inline a
+ * preview of an image too large to carry at full size — the agent still sees
+ * what arrived, and the original stays one `fetch_attachment` away.
+ */
+export function mediaThumbnailUrl(
+  homeserverUrl: string,
+  mxcUrl: string,
+  opts: { width?: number; height?: number; method?: 'scale' | 'crop' } = {},
+): string {
+  const { serverName, mediaId } = parseMxcUrl(mxcUrl);
+  const base = homeserverUrl.replace(/\/+$/, '');
+  const q = new URLSearchParams({
+    width: String(opts.width ?? 800),
+    height: String(opts.height ?? 800),
+    method: opts.method ?? 'scale',
+  });
+  return `${base}/_matrix/client/v1/media/thumbnail/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}?${q}`;
+}
+
+/**
  * Authenticated GET with an enforced size cap. Checks Content-Length when the
  * server provides one, and streams with a running byte budget as defense in
  * depth so a missing or lying header can't OOM the process.

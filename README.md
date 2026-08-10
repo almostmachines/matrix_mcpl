@@ -38,9 +38,19 @@ real typing notifications, first-class threads, and redaction, so
   plain text kept as `body`; incoming `formatted_body` is flattened back to
   text, with pills rendered as `@Name (mxid:@user:server)` so the agent can
   paste an ID straight into a tool call.
-- **Attachments**: incoming media is forwarded as `mxc://` refs and fetched on
-  demand via `fetch_attachment`, which resolves against the configured
-  homeserver only and is size-capped at 5MB with a streaming budget.
+- **Images arrive visible**: an incoming image is fetched and carried inline as
+  an image block on the message itself, so the agent sees it without a tool
+  call — and, crucially, so it *persists*. Connectome keeps a message's image
+  blocks in history but replaces a tool result's with a compact `[image: …]`
+  placeholder, so an image obtained via `fetch_attachment` is gone after the
+  turn and `save_recent_image` can no longer find it. Images above
+  `MATRIX_INLINE_IMAGE_MAX_BYTES` are inlined as a homeserver-scaled thumbnail
+  instead, with the original still one `fetch_attachment` away.
+- **Other attachments**: forwarded as `mxc://` refs and fetched on demand via
+  `fetch_attachment`, which resolves against the configured homeserver only and
+  is size-capped at 5MB with a streaming budget. Pass `saveTo` to write the file
+  straight to disk under `MATRIX_SAVE_ROOT` and get the path back — for keeping
+  a file, that beats round-tripping base64 through the context window.
 - **Typing**: `channels/typing` drives real Matrix typing notifications, so
   humans see the agent thinking.
 - **Rollback**: `matrix.messaging` supports MCPL checkpoints — rolling back
@@ -163,6 +173,9 @@ MATRIX_STORAGE_FILE=./matrix-mcpl-storage.json \
 | `MATRIX_BACKSCROLL_LIMIT` | no | Messages fetched on first interaction with a room (default 50) |
 | `MATRIX_ACCEPT_NOTICES` | no | `true` to deliver `m.notice` messages (default: dropped — they come from other bots, and forwarding them invites bot loops) |
 | `MATRIX_PEER_AGENTS` | no | Comma-separated MXIDs of sibling agents; their messages are tagged `chat:from-agent` instead of `chat:from-human` |
+| `MATRIX_INLINE_IMAGES` | no | `false` to stop carrying incoming images inline (they become refs only) |
+| `MATRIX_INLINE_IMAGE_MAX_BYTES` | no | Largest image carried at full size before falling back to a thumbnail (default 1500000). Lower than Anthropic's 5MB limit on purpose: an inlined image stays in history and is paid for on every compile until folding compresses it |
+| `MATRIX_SAVE_ROOT` | no | Directory `fetch_attachment(saveTo:)` may write into. Unset disables `saveTo`. Point it at a workspace mount so the agent can read back what it saves |
 | `MATRIX_MCPL_DEBUG_LOG` | no | Absolute path for a diagnostic file log |
 
 ## Running multiple agents

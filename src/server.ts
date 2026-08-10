@@ -47,13 +47,11 @@ import { featureSets, isEnabled, featureSetForTool } from './feature-sets.js';
 import { ChannelManager, mcplChannelId, parseMcplChannelId, toDescriptor } from './channels.js';
 import { StateTracker } from './state.js';
 import {
-  fetchAttachmentBytes,
-  mediaDownloadUrl,
   toFetchResult,
   type AttachmentRef,
 } from './content.js';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 
 // Diagnostic file logger — bypasses the host's stderr capture. Set
 // MATRIX_MCPL_DEBUG_LOG in the spawn env to a writable absolute path to
@@ -606,13 +604,25 @@ export class MatrixMcplServer {
         // Media is addressed by mxc:// URI and always fetched from the
         // configured homeserver — the access token has nowhere else to go.
         const mxcUrl = this.requireString(args, 'mxcUrl');
-        const url = mediaDownloadUrl(this.matrix.homeserverUrl, mxcUrl);
         const name = (typeof args.name === 'string' && args.name) || mxcUrl.split('/').pop() || 'attachment';
-        return toFetchResult(
-          await fetchAttachmentBytes(url, name, {
-            headers: { Authorization: `Bearer ${this.matrix.accessToken}` },
-          }),
-        );
+        const fetched = await this.matrix.fetchMedia(mxcUrl, name);
+
+        // saveTo writes the bytes straight to disk. For "keep this file" that
+        // beats returning base64 the agent must then hand to another tool —
+        // the image never enters the context window at all.
+        if (typeof args.saveTo === 'string' && args.saveTo) {
+          const dest = this.resolveSavePath(args.saveTo);
+          mkdirSync(dirname(dest), { recursive: true });
+          writeFileSync(dest, fetched.buf);
+          return {
+            saved: dest,
+            bytes: fetched.buf.byteLength,
+            mimeType: fetched.mimeType,
+            note: 'Written to disk. If this path is inside a workspace mount, read it back with the workspace tools.',
+          };
+        }
+
+        return toFetchResult(fetched);
       }
 
       case 'subscribe_room': {
@@ -651,6 +661,33 @@ export class MatrixMcplServer {
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
+  }
+
+  /**
+   * Resolve a `saveTo` argument to an absolute path inside MATRIX_SAVE_ROOT.
+   *
+   * The filename usually originates in an incoming message, so it is attacker
+   * influenced: anyone who can post in a watched room can propose one. Writes
+   * are therefore confined to a configured root, and traversal out of it is
+   * refused rather than normalised away. Unset root means the feature is off.
+   */
+  private resolveSavePath(requested: string): string {
+    const root = process.env.MATRIX_SAVE_ROOT;
+    if (!root) {
+      throw new Error(
+        'saveTo is not available: set MATRIX_SAVE_ROOT on the matrix-mcpl server to the ' +
+          'directory saved attachments should go to (ideally a workspace mount).',
+      );
+    }
+    const rootAbs = resolve(root);
+    const dest = resolve(rootAbs, requested);
+    if (dest !== rootAbs && !dest.startsWith(rootAbs + sep)) {
+      throw new Error(`saveTo must stay within ${rootAbs} (got "${requested}")`);
+    }
+    if (dest === rootAbs) {
+      throw new Error('saveTo must name a file, not the root directory');
+    }
+    return dest;
   }
 
   private requireString(args: Record<string, unknown>, key: string): string {
@@ -929,13 +966,96 @@ export class MatrixMcplServer {
     });
   }
 
-  /** Render attachment refs as a text block the agent can act on. Matrix media
-   *  needs an authenticated fetch against the homeserver, so bytes are pulled
-   *  on demand via fetch_attachment rather than inlined here. */
-  private attachmentNote(attachments: AttachmentRef[]): string {
-    const lines = attachments.map((a) =>
-      `- ${a.name} (${a.mimeType})${a.isImage ? ' — image' : ''}${a.size ? `, ${a.size} bytes` : ''}, fetchable via fetch_attachment: ${a.path}`,
-    );
+  /** Whether to carry incoming images inline as image blocks. */
+  private get inlineImages(): boolean {
+    return process.env.MATRIX_INLINE_IMAGES !== 'false';
+  }
+
+  /** Largest image carried at full size. Above this the homeserver scales it
+   *  down for us. Default 1.5MB — Anthropic accepts 5MB, but an inlined image
+   *  stays in the agent's history and is paid for on every compile until
+   *  folding compresses it, so the useful limit is smaller than the legal one. */
+  private get inlineImageMaxBytes(): number {
+    const raw = process.env.MATRIX_INLINE_IMAGE_MAX_BYTES;
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : 1_500_000;
+  }
+
+  /**
+   * Fetch incoming images and return them as inline image blocks.
+   *
+   * Delivering the bytes with the message — rather than leaving a ref for
+   * `fetch_attachment` — is what makes an image durable: the host keeps a
+   * message's image blocks in history, but replaces a tool result's with a
+   * compact `[image: …]` placeholder, so a fetched image vanishes after the
+   * turn and `save_recent_image` can no longer find it.
+   *
+   * Best-effort by design: a failed fetch falls back to the ref, which still
+   * works. An image is never a reason for the message itself not to arrive.
+   */
+  private async inlineImageBlocks(
+    attachments: AttachmentRef[],
+  ): Promise<{ blocks: ContentBlock[]; inlined: Set<string>; thumbed: Set<string> }> {
+    const blocks: ContentBlock[] = [];
+    const inlined = new Set<string>();
+    const thumbed = new Set<string>();
+    if (!this.inlineImages) return { blocks, inlined, thumbed };
+
+    const cap = this.inlineImageMaxBytes;
+    for (const a of attachments) {
+      if (!a.isImage) continue;
+      try {
+        // A declared size over the cap goes straight to a thumbnail, so the
+        // oversized original never crosses the wire at all.
+        let fetched = await this.matrix.fetchMedia(
+          a.path,
+          a.name,
+          a.size !== undefined && a.size > cap ? { thumbnail: {} } : {},
+        );
+        let isThumb = a.size !== undefined && a.size > cap;
+
+        // `info.size` is sender-controlled and often absent; re-check the
+        // bytes we actually got before committing them to history.
+        if (!isThumb && fetched.buf.byteLength > cap) {
+          fetched = await this.matrix.fetchMedia(a.path, a.name, { thumbnail: {} });
+          isThumb = true;
+        }
+
+        blocks.push({
+          type: 'image',
+          data: fetched.buf.toString('base64'),
+          // convertBlock on the host needs BOTH data and mimeType to build a
+          // base64 source; without the mimeType it falls through to a url
+          // source, which save_recent_image refuses.
+          mimeType: fetched.mimeType,
+        });
+        inlined.add(a.path);
+        if (isThumb) thumbed.add(a.path);
+        dbg('inline-image', { name: a.name, bytes: fetched.buf.byteLength, thumbnail: isThumb });
+      } catch (err) {
+        dbg('inline-image:failed', { name: a.name, mxc: a.path, error: (err as Error).message });
+      }
+    }
+    return { blocks, inlined, thumbed };
+  }
+
+  /** Render attachment refs as a text block the agent can act on. Images
+   *  carried inline are named so the agent can connect what it sees to a
+   *  filename and re-fetch or save it; anything not inlined keeps the
+   *  fetch-on-demand instruction. */
+  private attachmentNote(
+    attachments: AttachmentRef[],
+    inlined: Set<string> = new Set(),
+    thumbed: Set<string> = new Set(),
+  ): string {
+    const lines = attachments.map((a) => {
+      const size = a.size ? `, ${a.size} bytes` : '';
+      if (inlined.has(a.path)) {
+        const shown = thumbed.has(a.path) ? 'shown above as a scaled preview' : 'shown above';
+        return `- ${a.name} (${a.mimeType})${size} — ${shown}. Full original: fetch_attachment("${a.path}"), or save it with fetch_attachment("${a.path}", saveTo: "<filename>").`;
+      }
+      return `- ${a.name} (${a.mimeType})${a.isImage ? ' — image' : ''}${size}, fetchable via fetch_attachment: ${a.path}`;
+    });
     return `[attachments: ${attachments.length}]\n${lines.join('\n')}`;
   }
 
@@ -1063,7 +1183,10 @@ export class MatrixMcplServer {
 
     const contentBlocks: ContentBlock[] = [textContent(renderedContent)];
     if (msg.attachments.length > 0) {
-      contentBlocks.push(textContent(this.attachmentNote(msg.attachments)));
+      // Images first, then the note — so the note's "shown above" is true.
+      const { blocks, inlined, thumbed } = await this.inlineImageBlocks(msg.attachments);
+      contentBlocks.push(...blocks);
+      contentBlocks.push(textContent(this.attachmentNote(msg.attachments, inlined, thumbed)));
     }
 
     // MCPL RFC-001 event tags — reserved chat:* core, umbrellas included.
