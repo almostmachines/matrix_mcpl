@@ -284,6 +284,28 @@ export class MatrixMcplServer {
           break;
         }
 
+        case method.FEATURE_SETS_UPDATE: {
+          // MCPL 0.5 (§5.3/§6.7) delivers the grant as a Request expecting a
+          // receipt, where 0.4 used a Notification. agent-framework ≥0.9 sends
+          // the Request form, so a server that only handles the Notification
+          // answers `Method not found` and never learns what it was granted.
+          // Both forms are accepted here; this server stays declared 0.4,
+          // since it does not implement 0.5's fail-closed semantics.
+          this.applyFeatureSetsUpdate(params as unknown as FeatureSetsUpdateParams, 'request');
+          const unavailable = featureSets
+            .map((fs) => fs.name)
+            .filter((name) => !isEnabled(name, this.enabledFeatureSets));
+          conn.sendResponse(req.id, {
+            accepted: true,
+            mode: unavailable.length === 0 ? 'full' : 'degraded',
+            unavailableFeatures: unavailable,
+            notes: unavailable.length > 0
+              ? [`${unavailable.join(', ')}: not granted — incoming Matrix messages will not be delivered`]
+              : [],
+          });
+          break;
+        }
+
         case method.CONTEXT_AFTER_INFERENCE: {
           // Not declared in capabilities; answered as a harmless no-op in
           // case an older host still calls it.
@@ -332,18 +354,7 @@ export class MatrixMcplServer {
   private handleNotification(notif: JsonRpcNotification): void {
     switch (notif.method) {
       case method.FEATURE_SETS_UPDATE: {
-        const p = notif.params as FeatureSetsUpdateParams;
-        if (p.enabled) {
-          for (const name of p.enabled) this.enabledFeatureSets.add(name);
-        }
-        if (p.disabled) {
-          for (const name of p.disabled) this.enabledFeatureSets.delete(name);
-        }
-        dbg('featureSets:update', {
-          enabled: p.enabled,
-          disabled: p.disabled,
-          now: [...this.enabledFeatureSets],
-        });
+        this.applyFeatureSetsUpdate(notif.params as FeatureSetsUpdateParams, 'notification');
         break;
       }
 
@@ -402,6 +413,26 @@ export class MatrixMcplServer {
         // Ignore unknown notifications
         break;
     }
+  }
+
+  /** Apply a feature-set grant. Shared by the Notification (0.4) and Request
+   *  (0.5) forms so the two can never drift apart. */
+  private applyFeatureSetsUpdate(
+    p: FeatureSetsUpdateParams,
+    form: 'notification' | 'request',
+  ): void {
+    if (p?.enabled) {
+      for (const name of p.enabled) this.enabledFeatureSets.add(name);
+    }
+    if (p?.disabled) {
+      for (const name of p.disabled) this.enabledFeatureSets.delete(name);
+    }
+    dbg('featureSets:update', {
+      form,
+      enabled: p?.enabled,
+      disabled: p?.disabled,
+      now: [...this.enabledFeatureSets],
+    });
   }
 
   // ── Tool Call Handling ──
