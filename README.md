@@ -238,6 +238,46 @@ Add to your recipe's `mcpServers` block (see `recipe-snippet.json`):
 }
 ```
 
+### `enabledFeatureSets` is not optional
+
+**Omit it and the host disables every feature set this server declares.** Messages
+arrive, mentions are detected, and then each one is dropped at the permission
+gate — with no error in the journal, no error in the host log, and nothing on
+stderr. It looks exactly like a homeserver that never delivered the message.
+
+Two things make this sharp edge sharper:
+
+- The host's own MCPL admin module documents the field as *"Omit or pass `[]`
+  for all offered"*, but `feature-set-manager`'s `resolvePatterns([])` enables
+  **nothing**. Trust the behaviour, not the docstring.
+- Patterns match **one dot-segment at a time**, so `*` is not "everything" — it
+  matches single-segment names only, and never matches `matrix.messaging`.
+
+Use explicit names (or `matrix.*`):
+
+```json
+"enabledFeatureSets": ["matrix.messaging", "matrix.history", "matrix.rooms"]
+```
+
+Confirm it took: with `MATRIX_MCPL_DEBUG_LOG` set, the handshake logs what is
+actually live.
+
+```
+handshake:complete  {"enabledFeatureSets":["matrix.messaging","matrix.history","matrix.rooms"]}
+featureSets:update  {"enabled":[...],"now":["matrix.messaging","matrix.history","matrix.rooms"]}
+```
+
+A `"now":[]` there means every message will be silently discarded.
+
+### Always set `MATRIX_MCPL_DEBUG_LOG`
+
+connectome-host **discards MCP server stderr entirely** — it reaches neither the
+journal nor any file on disk. Without the debug log there is no way to see this
+server's own account of what it did, which turns an ordinary misconfiguration
+into an undiagnosable silence.
+
+### Wake policy
+
 Subscribing at the MCPL layer is only half of it — the host's wake policy
 decides whether an arriving event triggers inference. Add a matching rule to
 `_config/gate.json`:
