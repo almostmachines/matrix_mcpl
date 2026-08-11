@@ -44,6 +44,8 @@ class FakeConn {
   /** True once the host's channels/register Request is outstanding. */
   registerOutstanding = false;
 
+  constructor(private readonly holdRegistration = true) {}
+
   push(msg: Incoming): void {
     const waiter = this.waiters.shift();
     if (waiter) waiter(msg);
@@ -59,9 +61,13 @@ class FakeConn {
   sendRequest(method: string, params?: unknown): Promise<unknown> {
     this.sent.push({ kind: 'request', method, ...(params !== undefined ? {} : {}) });
     if (method === 'channels/register') {
+      this.registerOutstanding = true;
+      if (!this.holdRegistration) {
+        this.registerOutstanding = false;
+        return Promise.resolve({});
+      }
       // The host is busy awaiting its own featureSets/update receipt, so it
       // does not answer this until that arrives.
-      this.registerOutstanding = true;
       return new Promise<unknown>((resolve) => {
         this.releaseRegister = () => resolve({});
       });
@@ -92,7 +98,12 @@ class FakeConn {
   }
 }
 
-function fakeAdapter(): MatrixAdapter {
+interface FakeAdapterOptions {
+  /** Optional gate used to keep fetchHistory genuinely in flight. */
+  beforeFetchHistoryReturn?: () => Promise<void>;
+}
+
+function fakeAdapter(options: FakeAdapterOptions = {}): MatrixAdapter {
   return {
     serverName: 'example.org',
     userId: '@bot:example.org',
@@ -108,6 +119,13 @@ function fakeAdapter(): MatrixAdapter {
           encrypted: false,
         },
       ];
+    },
+    async resolveRoom(roomId: string) {
+      return roomId;
+    },
+    async fetchHistory() {
+      await options.beforeFetchHistoryReturn?.();
+      return { messages: [], truncated: false };
     },
   } as unknown as MatrixAdapter;
 }
@@ -173,36 +191,70 @@ test('answers a Request-form featureSets/update while channels/register is still
 });
 
 test('a slow request handler does not stall replies to later requests', async () => {
-  // Same failure class as the deadlock: the loop used to await each handler,
-  // so one slow tool call (a large fetch_attachment) would hold up the
-  // protocol replies the host is timing out on.
-  const conn = new FakeConn();
-  const server = new MatrixMcplServer(fakeAdapter());
+  // Isolate request dispatch from the startup deadlock: registration resolves
+  // immediately in this test, while fetchHistory is held on a controlled gate.
+  // The old sequential loop would await the tools/call handler and never reach
+  // the channels/list request until the gate was released.
+  let historyStarted = false;
+  let releaseHistory!: () => void;
+  const historyGate = new Promise<void>((resolve) => {
+    releaseHistory = resolve;
+  });
+
+  const conn = new FakeConn(false);
+  const server = new MatrixMcplServer(fakeAdapter({
+    beforeFetchHistoryReturn: async () => {
+      historyStarted = true;
+      await historyGate;
+    },
+  }));
   const served = server.serve(conn as unknown as McplConnection);
 
-  pushHandshake(conn);
-  await waitFor(() => conn.sent.some((s) => s.kind === 'response' && s.id === 0));
+  try {
+    pushHandshake(conn);
+    assert.ok(
+      await waitFor(() => conn.sent.some((s) => s.kind === 'response' && s.id === 0)),
+      'initialize was not answered',
+    );
+    assert.ok(
+      await waitFor(() => conn.sent.some((s) => s.kind === 'request' && s.method === 'channels/register')),
+      'channels/register was not sent',
+    );
 
-  // tools/call for a tool that will sit on the network for a while.
-  conn.push({
-    type: 'request',
-    request: {
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: 'fetch_history', arguments: { roomId: '!room:example.org' } },
-    },
-  });
-  // A cheap protocol request queued right behind it.
-  conn.push({
-    type: 'request',
-    request: { jsonrpc: '2.0', id: 2, method: 'channels/list', params: {} },
-  });
+    // tools/call for a tool that is guaranteed to remain in flight.
+    conn.push({
+      type: 'request',
+      request: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'fetch_history', arguments: { roomId: '!room:example.org' } },
+      },
+    });
+    assert.ok(
+      await waitFor(() => historyStarted),
+      'fetch_history never reached the controlled slow operation',
+    );
 
-  const answered = await waitFor(() => conn.sent.some((s) => s.kind === 'response' && s.id === 2));
-  assert.ok(answered, 'channels/list was not answered while a slower call was in flight');
+    // A cheap protocol request queued behind the still-blocked tool call.
+    conn.push({
+      type: 'request',
+      request: { jsonrpc: '2.0', id: 2, method: 'channels/list', params: {} },
+    });
 
-  conn.close();
-  conn.push({ type: 'notification', notification: { jsonrpc: '2.0', method: 'noop' } });
-  await served;
+    const answered = await waitFor(() =>
+      conn.sent.some((s) => s.kind === 'response' && s.id === 2),
+    );
+    assert.ok(answered, 'channels/list was not answered while a slower call was in flight');
+    assert.ok(
+      !conn.sent.some((s) => s.kind === 'response' && s.id === 1),
+      'fetch_history unexpectedly completed before its gate was released',
+    );
+  } finally {
+    releaseHistory();
+    await waitFor(() => conn.sent.some((s) => s.kind === 'response' && s.id === 1));
+    conn.close();
+    conn.push({ type: 'notification', notification: { jsonrpc: '2.0', method: 'noop' } });
+    await served;
+  }
 });
