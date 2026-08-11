@@ -131,9 +131,17 @@ export class MatrixMcplServer {
     // Handshake
     await this.handleInitialize();
 
-    // If MCPL is enabled, register all joined Matrix rooms
+    // Register channels WITHOUT awaiting: `channels/register` is a Request,
+    // and its response can only arrive once the loop below is pumping. Waiting
+    // for it here deadlocks against any Request the host sends first — under
+    // MCPL 0.5 that is `featureSets/update`, and when it goes unanswered the
+    // host disables this server's whole privileged surface (§6.7). Under 0.4
+    // the same code looked fine only because the grant arrived as a
+    // Notification, which expects no reply.
     if (this.mcplEnabled) {
-      await this.registerMatrixRooms();
+      void this.registerMatrixRooms().catch((err) => {
+        console.error('[matrix-mcpl] channel registration failed:', (err as Error).message);
+      });
     }
 
     // Main loop
@@ -141,7 +149,13 @@ export class MatrixMcplServer {
       while (!conn.isClosed) {
         const msg = await conn.nextMessage();
         if (msg.type === 'request') {
-          await this.handleRequest(msg.request);
+          // Dispatched without awaiting, for the same reason: JSON-RPC
+          // correlates by id and tolerates out-of-order responses, so a slow
+          // handler (a multi-megabyte fetch_attachment, an inline image fetch)
+          // must not stall the protocol replies the host is timing.
+          void this.handleRequest(msg.request).catch((err) => {
+            console.error('[matrix-mcpl] request handler failed:', (err as Error).message);
+          });
         } else {
           this.handleNotification(msg.notification);
         }
