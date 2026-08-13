@@ -51,6 +51,16 @@ real typing notifications, first-class threads, and redaction, so
   is size-capped at 5MB with a streaming budget. Pass `saveTo` to write the file
   straight to disk under `MATRIX_SAVE_ROOT` and get the path back — for keeping
   a file, that beats round-tripping base64 through the context window.
+- **Discovery**: `list_rooms` shows rooms already joined; `list_public_rooms`
+  shows what's available to join, organised by space and marked `joined:
+  true/false`. It merges the published directory with each visible space's
+  hierarchy, because neither is complete on its own — a public room that was
+  never published to the directory is invisible there, but shows up if a space
+  lists it.
+- **Spaces are organisation, not conversation**: an `m.space` is never
+  registered as a channel and never appears in `list_rooms`. It is rendered as
+  a container holding its rooms, and `join_room` on one says so explicitly —
+  joining a space delivers nothing and does not join its children.
 - **Typing**: `channels/typing` drives real Matrix typing notifications, so
   humans see the agent thinking.
 - **Rollback**: `matrix.messaging` supports MCPL checkpoints — rolling back
@@ -65,7 +75,8 @@ real typing notifications, first-class threads, and redaction, so
 ## Tools
 
 `send_message`, `reply_message`, `send_dm`, `add_reaction`, `edit_message`,
-`delete_message`, `list_rooms`, `refresh_rooms`, `join_room`, `leave_room`,
+`delete_message`, `list_rooms`, `list_public_rooms`, `refresh_rooms`,
+`join_room`, `leave_room`,
 `fetch_history`, `fetch_thread`, `find_user`, `fetch_attachment`,
 `subscribe_room`, `unsubscribe_room`, `list_subscriptions`.
 
