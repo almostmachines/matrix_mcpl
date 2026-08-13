@@ -581,7 +581,7 @@ export class MatrixMcplServer {
         const meta = await this.matrix.getRoomMeta(roomId);
 
         // Joining a space is legitimate — it makes the space's unpublished
-        // rooms visible to list_public_rooms — but it is not a conversation,
+        // rooms visible to discover_rooms — but it is not a conversation,
         // so saying "the host already knew this room" (which is what an
         // unregistered channel used to report) is actively misleading.
         if (meta?.kind === 'space') {
@@ -593,7 +593,7 @@ export class MatrixMcplServer {
               `Joined "${meta.name}", but this is a Matrix space — an organisational ` +
               'container for rooms, not a conversation. No messages arrive here and it is ' +
               'not registered as a channel. Joining a space does NOT join its rooms: use ' +
-              'list_public_rooms to see what it contains, then join_room each room you want.',
+              'discover_rooms to see what it contains, then join_room each room you want.',
           };
         }
 
@@ -607,7 +607,7 @@ export class MatrixMcplServer {
         };
       }
 
-      case 'list_public_rooms':
+      case 'discover_rooms':
         return await this.listPublicRooms();
 
       case 'leave_room': {

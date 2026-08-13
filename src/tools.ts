@@ -135,7 +135,7 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
-    name: 'list_public_rooms',
+    name: 'discover_rooms',
     description:
       'Discover rooms available to join on the homeserver, joined or not, organised by ' +
       'space. Each room reports joined:true/false. Spaces are shown as containers holding ' +

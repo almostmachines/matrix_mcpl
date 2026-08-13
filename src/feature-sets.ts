@@ -86,7 +86,7 @@ export function featureSetForTool(toolName: string): string | undefined {
     case 'list_subscriptions':
       return 'matrix.rooms';
     case 'list_rooms':
-    case 'list_public_rooms':
+    case 'discover_rooms':
     case 'refresh_rooms':
     case 'find_user':
       return undefined; // Always available
