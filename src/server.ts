@@ -41,11 +41,12 @@ import type {
   ChannelsOutgoingCompleteParams,
 } from '@animalabs/mcpl-core';
 
-import type { MatrixAdapter, MatrixMessageData } from './matrix-adapter.js';
+import type { MatrixAdapter, MatrixMessageData, PublicRoomInfo } from './matrix-adapter.js';
 import { toolDefinitions } from './tools.js';
 import { featureSets, isEnabled, featureSetForTool } from './feature-sets.js';
 import { ChannelManager, mcplChannelId, parseMcplChannelId, toDescriptor } from './channels.js';
 import { StateTracker } from './state.js';
+import { buildRoomTree } from './discovery.js';
 import {
   toFetchResult,
   type AttachmentRef,
@@ -577,15 +578,37 @@ export class MatrixMcplServer {
 
       case 'join_room': {
         const roomId = await this.matrix.joinRoom(this.requireString(args, 'roomIdOrAlias'));
+        const meta = await this.matrix.getRoomMeta(roomId);
+
+        // Joining a space is legitimate — it makes the space's unpublished
+        // rooms visible to list_public_rooms — but it is not a conversation,
+        // so saying "the host already knew this room" (which is what an
+        // unregistered channel used to report) is actively misleading.
+        if (meta?.kind === 'space') {
+          return {
+            roomId,
+            isSpace: true,
+            registered: false,
+            note:
+              `Joined "${meta.name}", but this is a Matrix space — an organisational ` +
+              'container for rooms, not a conversation. No messages arrive here and it is ' +
+              'not registered as a channel. Joining a space does NOT join its rooms: use ' +
+              'list_public_rooms to see what it contains, then join_room each room you want.',
+          };
+        }
+
         const added = await this.registerRoom(roomId);
         return {
           roomId,
           registered: added,
           note: added
             ? 'Joined and registered as a channel.'
-            : 'Joined; the host already knew this room.',
+            : 'Joined; the host already had this room registered as a channel.',
         };
       }
+
+      case 'list_public_rooms':
+        return await this.listPublicRooms();
 
       case 'leave_room': {
         const roomId = await this.matrix.resolveRoom(this.requireString(args, 'roomId'));
@@ -735,6 +758,43 @@ export class MatrixMcplServer {
     return dest;
   }
 
+  /**
+   * Discoverable rooms, organised by space.
+   *
+   * Merges two sources because neither is complete on its own: the published
+   * directory misses rooms a space knows about but that were never published,
+   * and a hierarchy only covers one space's subtree. Spaces are rendered as
+   * containers holding their rooms rather than as joinable entries, since
+   * joining one delivers nothing and does not join its children.
+   */
+  private async listPublicRooms(): Promise<Record<string, unknown>> {
+    const [directory, joined] = await Promise.all([
+      this.matrix.listPublicRooms(),
+      this.matrix.joinedRoomIds(),
+    ]);
+
+    // Expand every visible space; its children may not be in the directory.
+    const hierarchies: PublicRoomInfo[][] = [];
+    for (const space of directory.filter((r) => r.isSpace)) {
+      try {
+        hierarchies.push(await this.matrix.getSpaceHierarchy(space.roomId));
+      } catch (err) {
+        dbg('hierarchy:failed', { spaceId: space.roomId, error: (err as Error).message });
+      }
+    }
+
+    const tree = buildRoomTree(directory, hierarchies, joined);
+    return {
+      spaces: tree.spaces,
+      ungroupedRooms: tree.ungroupedRooms,
+      note:
+        `${tree.joinable} room(s) here are not yet joined. Spaces are organisational ` +
+        'containers only — join the rooms inside them individually with join_room; ' +
+        'joining a space delivers nothing. Rooms with a public join rule that were ' +
+        'never published to the directory only show up if a space lists them.',
+    };
+  }
+
   private requireString(args: Record<string, unknown>, key: string): string {
     const v = args[key];
     if (typeof v !== 'string' || v.length === 0) {
@@ -868,7 +928,8 @@ export class MatrixMcplServer {
   private async registerRoom(roomId: string): Promise<boolean> {
     if (!this.mcplEnabled) return false;
     const meta = await this.matrix.getRoomMeta(roomId);
-    if (!meta) return false;
+    // Spaces hold rooms, not messages — never a channel.
+    if (!meta || meta.kind === 'space') return false;
     return this.registerAndNotifyNew([toDescriptor(meta, this.matrix.serverName)]).length > 0;
   }
 

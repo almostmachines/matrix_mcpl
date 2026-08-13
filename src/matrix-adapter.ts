@@ -47,7 +47,23 @@ const CONTENT_MSGTYPES = new Set([
 
 const ATTACHMENT_MSGTYPES = new Set(['m.image', 'm.file', 'm.audio', 'm.video']);
 
-export type RoomKind = 'room' | 'dm';
+export type RoomKind = 'room' | 'dm' | 'space';
+
+/** A room as seen from the directory or a space hierarchy — i.e. possibly one
+ *  we have not joined. Distinct from MatrixRoomInfo, which describes a room we
+ *  are in and can therefore read state from. */
+export interface PublicRoomInfo {
+  roomId: string;
+  name?: string;
+  alias?: string;
+  topic?: string;
+  memberCount?: number;
+  /** True for `m.space`: an organisational container, not a conversation. */
+  isSpace: boolean;
+  joinRule?: string;
+  /** Child room IDs, when this came from a space hierarchy. */
+  children?: string[];
+}
 
 export interface MatrixRoomInfo {
   roomId: string;
@@ -270,7 +286,7 @@ export class MatrixAdapter {
       );
       for (const info of batch) {
         // Spaces are not conversations — they hold rooms, not messages.
-        if (info) out.push(info);
+        if (info && info.kind !== 'space') out.push(info);
       }
     }
     return out;
@@ -278,6 +294,55 @@ export class MatrixAdapter {
 
   async getRoomMeta(roomId: string): Promise<MatrixRoomInfo | null> {
     return this.describeRoom(roomId).catch(() => null);
+  }
+
+  /** Room IDs this account has joined — used to mark directory results. */
+  async joinedRoomIds(): Promise<Set<string>> {
+    try {
+      return new Set(await this.client.getJoinedRooms());
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * The homeserver's published room directory, spaces included.
+   *
+   * Note this lists rooms *published* to the directory, which is not the same
+   * as every room with a public join rule — an unpublished public room is
+   * invisible here. A space's hierarchy often reveals those, which is why
+   * discovery merges both sources.
+   */
+  async listPublicRooms(limit = 100): Promise<PublicRoomInfo[]> {
+    const res = (await this.client.doRequest(
+      'GET',
+      '/_matrix/client/v3/publicRooms',
+      { limit },
+    )) as { chunk?: Array<Record<string, unknown>> };
+
+    return (res.chunk ?? []).map((r) => publicRoomFrom(r));
+  }
+
+  /**
+   * Walk a space's hierarchy. The response is the subtree flattened, with the
+   * space itself first; parent→child edges come from each entry's
+   * `children_state`. Nested spaces appear as entries of their own.
+   */
+  async getSpaceHierarchy(spaceId: string, limit = 100): Promise<PublicRoomInfo[]> {
+    const res = (await this.client.doRequest(
+      'GET',
+      `/_matrix/client/v1/rooms/${encodeURIComponent(spaceId)}/hierarchy`,
+      { limit },
+    )) as { rooms?: Array<Record<string, unknown>> };
+
+    return (res.rooms ?? []).map((r) => {
+      const info = publicRoomFrom(r);
+      const childrenState = Array.isArray(r.children_state) ? r.children_state : [];
+      info.children = childrenState
+        .map((c) => (c as { state_key?: unknown }).state_key)
+        .filter((k): k is string => typeof k === 'string');
+      return info;
+    });
   }
 
   /** Drop cached metadata for a room (used after joins and state changes). */
@@ -297,9 +362,24 @@ export class MatrixAdapter {
       this.roomState(roomId, 'm.room.create'),
     ]);
 
-    // A space is a room whose create event says so; it holds child rooms, not
-    // messages, so it is never a channel.
-    if (createEv && createEv['type'] === 'm.space') return null;
+    // A space is a room whose create event says so. It holds child rooms, not
+    // messages, so it is never registered as a channel — but it IS described,
+    // so callers can tell a space apart from a room that simply failed to
+    // resolve. listRooms() filters them out; join_room explains them.
+    if (createEv && createEv['type'] === 'm.space') {
+      const spaceInfo: MatrixRoomInfo = {
+        roomId,
+        kind: 'space',
+        name: (nameEv?.['name'] as string | undefined)
+          ?? (aliasEv?.['alias'] as string | undefined)
+          ?? roomId,
+        alias: (aliasEv?.['alias'] as string | undefined) ?? undefined,
+        topic: (topicEv?.['topic'] as string | undefined) || undefined,
+        encrypted: false,
+      };
+      this.roomCache.set(roomId, spaceInfo);
+      return spaceInfo;
+    }
 
     const isDm = this.client.dms.isDm(roomId);
     let members: string[] = [];
@@ -730,6 +810,22 @@ export class MatrixAdapter {
 }
 
 // ── Free functions ──
+
+/** Shape a directory / hierarchy entry into PublicRoomInfo. Both endpoints
+ *  return the same room summary fields. */
+function publicRoomFrom(r: Record<string, unknown>): PublicRoomInfo {
+  const str = (k: string): string | undefined =>
+    typeof r[k] === 'string' && r[k] ? (r[k] as string) : undefined;
+  return {
+    roomId: str('room_id') ?? '',
+    name: str('name'),
+    alias: str('canonical_alias'),
+    topic: str('topic'),
+    memberCount: typeof r.num_joined_members === 'number' ? r.num_joined_members : undefined,
+    isSpace: r.room_type === 'm.space',
+    joinRule: str('join_rule'),
+  };
+}
 
 /** True for events worth showing the agent in a history listing. */
 function isDisplayableMessage(event: RawMatrixEvent): boolean {

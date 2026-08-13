@@ -135,6 +135,20 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'list_public_rooms',
+    description:
+      'Discover rooms available to join on the homeserver, joined or not, organised by ' +
+      'space. Each room reports joined:true/false. Spaces are shown as containers holding ' +
+      'their rooms — a space is an organisational grouping, NOT a conversation: nothing is ' +
+      'delivered from one and joining it does not join its rooms, which must be joined ' +
+      'individually. Use this to find somewhere to join, then join_room. Note it can only ' +
+      'see rooms published to the directory, plus any room a visible space lists.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'join_room',
     description:
       'Join a Matrix room by ID or alias. The room must be public, or the bot must already ' +
