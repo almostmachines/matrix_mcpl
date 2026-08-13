@@ -1195,6 +1195,26 @@ export class MatrixMcplServer {
     const channelMcplId = mcplChannelId(msg.roomId);
     const channelIsOpen = this.channelManager.isOpen(channelMcplId);
 
+    // Directly-addressed messages always go as channels/incoming, even when the
+    // host has this channel closed.
+    //
+    // Only channels/incoming sets the host's reply locus (`defaultPublishChannel`
+    // in channel-registry.ts); push/event does not. A DM arriving while some
+    // other room is open therefore gets answered *in that other room* — which is
+    // exactly what happened to a DM here on 2026-08-13.
+    //
+    // Sending incoming on a closed channel is expected by the host, not a
+    // violation: it treats it as "authoritative evidence that the transport is
+    // actually open", repairs its own status, and lazy-registers channels it has
+    // never seen, precisely so a reply is not "silently dropped, even though this
+    // very message proves the channel is reachable". Durable desired state still
+    // changes only through lifecycle operations, so this does not override the
+    // host's intent — it just stops a direct address being unanswerable.
+    //
+    // Ambient chatter on a closed channel stays a push/event, so "closed" still
+    // means "don't follow along here".
+    const deliverAsIncoming = channelIsOpen || isAddressed;
+
     // Location header only when the room differs from the last communication
     // context (compare BEFORE updating the tracker).
     const contextChanged = this.lastRoomId !== msg.roomId;
@@ -1271,7 +1291,7 @@ export class MatrixMcplServer {
     };
 
     // If this channel is open, use channels/incoming; otherwise push/event
-    if (channelIsOpen) {
+    if (deliverAsIncoming) {
       const incomingParams: ChannelsIncomingParams = {
         messages: [{
           channelId: channelMcplId,
