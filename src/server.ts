@@ -388,25 +388,23 @@ export class MatrixMcplServer {
 
       case method.CHANNELS_OUTGOING_COMPLETE: {
         const p = notif.params as ChannelsOutgoingCompleteParams;
+        // Release the streaming buffer and nothing more. Spec 14.3 streaming is an
+        // OBSERVER surface: "the authoritative delivery is the eventual
+        // channels/publish" (agent-framework channel-registry, sendOutgoingChunk),
+        // and handlePublish() already performs that send. Sending here too posts
+        // every reply TWICE.
+        //
+        // This stayed latent until agent-framework 0.11.0. The old streaming gate
+        // checked the raw capability advertisement, which is undefined for the
+        // boolean `channels: true` shape, so no server ever received these
+        // notifications. 0.11.0 fixed the gate to consult the capability GRANT
+        // (§5.4) — the notifications began arriving and the double-post surfaced.
+        // That same framework comment notes the broken gate had been masking
+        // discord-mcpl's identical defect (AUDIT-001).
+        //
+        // If a typing indicator or live edit-in-place is ever wanted, THIS is the
+        // hook for it — but it must not create a message.
         this.outgoingBuffers.delete(p.inferenceId);
-
-        // Extract text and send to Matrix (into the active thread, if any)
-        const text = p.content
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-          .map((b) => b.text)
-          .join('\n');
-
-        if (text) {
-          const parsed = parseMcplChannelId(p.channelId);
-          if (parsed) {
-            const ctx = this.lastIncomingThread.get(parsed.roomId);
-            this.matrix
-              .sendMessage(parsed.roomId, text, ctx?.threadRootId ? { threadRootId: ctx.threadRootId } : {})
-              .catch((err) => {
-                console.error('[matrix-mcpl] outgoing/complete send failed:', (err as Error).message);
-              });
-          }
-        }
         break;
       }
 
