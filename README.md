@@ -23,14 +23,21 @@ real typing notifications, first-class threads, and redaction, so
   (`matrix:<roomId>`); `channels/publish` replies into the room's active thread
   automatically.
 - **Real-time events** via `/sync` — no public webhook URL needed.
-- **Addressing model**: mentions and DMs are always delivered; ambient room
-  chatter flows only from subscribed rooms (auto-subscribe on first mention, opt
-  out with `unsubscribe_room`). Events carry MCPL RFC-001 `chat:*` tags for
-  host-side wake gating.
+- **Addressing model**: mentions, DMs and `@room` broadcasts are always
+  delivered; ambient room chatter flows only from subscribed rooms
+  (auto-subscribe on first mention, opt out with `unsubscribe_room`). Events
+  carry MCPL RFC-001 `chat:*` tags for host-side wake gating.
 - **Mentions**: reads `m.mentions.user_ids` (intentional mentions, Matrix 1.7),
   falling back to `matrix.to` pills and then to the display name for older
-  clients. An `@room` broadcast is deliberately *not* a personal mention — it
-  tags `matrix:room-ping` and stays ambient.
+  clients.
+- **`@room` broadcasts**: an `@room` addresses every agent in the room, exactly
+  as a personal mention addresses one — it is delivered even from a room with
+  no ambient subscription, and tags `chat:addressed` + `chat:broadcast` +
+  `matrix:room-ping` so a host can wake on it and still tell a broadcast from a
+  personal mention. It stays *not* a personal mention (`mentioned` is false),
+  and unlike a mention it does not auto-subscribe the room to ambient traffic.
+  Set `MATRIX_ROOM_PING=ambient` (or `ignore`) to keep `@room` out of the
+  addressed path.
 - **Threads**: incoming `m.thread` replies carry `threadId`; `reply_message`
   posts into a thread by default, with `thread: false` for a rich reply.
 - **Markdown both ways**: outgoing markdown is rendered into Matrix's
@@ -181,6 +188,7 @@ MATRIX_STORAGE_FILE=./matrix-mcpl-storage.json \
 | `MATRIX_STORAGE_FILE` | no | JSON file persisting the `/sync` token. **Strongly recommended** — without it every restart is a cold start and offline messages are lost |
 | `MATRIX_SUBSCRIPTIONS_FILE` | no | JSON file persisting ambient subscriptions across restarts |
 | `MATRIX_BACKSCROLL_LIMIT` | no | Messages fetched on first interaction with a room (default 50) |
+| `MATRIX_ROOM_PING` | no | How an `@room` broadcast is treated: `address` (default — reaches the agent from any joined room and is tagged `chat:addressed`, like a mention), or `ambient`/`ignore` (subscribed rooms only, as ordinary chatter) |
 | `MATRIX_ACCEPT_NOTICES` | no | `true` to deliver `m.notice` messages (default: dropped — they come from other bots, and forwarding them invites bot loops) |
 | `MATRIX_PEER_AGENTS` | no | Comma-separated MXIDs of sibling agents; their messages are tagged `chat:from-agent` instead of `chat:from-human` |
 | `MATRIX_INLINE_IMAGES` | no | `false` to stop carrying incoming images inline (they become refs only) |

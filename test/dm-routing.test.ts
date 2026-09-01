@@ -203,3 +203,75 @@ test('ambient chatter on a closed channel still uses push/event', async () => {
     await stop();
   }
 });
+
+test('an @room broadcast reaches an unsubscribed room as channels/incoming', async () => {
+  // The reason this exists: an announcement in a room no agent had ever been
+  // mentioned in was dropped as ambient-unsubscribed, so @room woke nobody.
+  const { conn, emit, stop } = await startServer();
+  try {
+    emit(message({
+      roomId: GROUP_ROOM,
+      isDM: false,
+      mentionsBot: false,
+      pingsRoom: true,
+      content: '@room stand-up in five',
+      cleanContent: '@room stand-up in five',
+      id: '$evt4',
+    }));
+
+    assert.ok(
+      await waitFor(() => conn.sent.some((s) => s.method === 'channels/incoming')),
+      'an @room broadcast must be delivered even without an ambient subscription',
+    );
+
+    const params = conn.sent.find((s) => s.method === 'channels/incoming')?.params as
+      | { messages?: Array<{ tags?: string[]; metadata?: Record<string, unknown> }> }
+      | undefined;
+    const msg = params?.messages?.[0];
+    assert.ok(msg?.tags?.includes('chat:addressed'), `broadcast must wake like a mention; got ${JSON.stringify(msg?.tags)}`);
+    assert.ok(msg?.tags?.includes('chat:broadcast'), 'broadcast must stay distinguishable from a personal mention');
+    assert.ok(msg?.tags?.includes('matrix:room-ping'), 'the platform extension tag is kept');
+    assert.ok(!msg?.tags?.includes('chat:mention'), '@room is not a personal mention');
+    assert.equal(msg?.metadata?.mentioned, false);
+    assert.equal(msg?.metadata?.addressedByRoomPing, true);
+  } finally {
+    await stop();
+  }
+});
+
+test('an @room broadcast does not auto-subscribe the room', async () => {
+  // Waking on the announcement is one thing; signing up for every word said
+  // in that room afterwards is another.
+  const { conn, emit, stop } = await startServer();
+  try {
+    emit(message({ roomId: GROUP_ROOM, isDM: false, pingsRoom: true, id: '$evt5' }));
+    assert.ok(await waitFor(() => conn.sent.some((s) => s.method === 'channels/incoming')));
+    const first = conn.sent.length;
+
+    // Ordinary chatter afterwards must still be dropped as unsubscribed.
+    emit(message({ roomId: GROUP_ROOM, isDM: false, id: '$evt6' }));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(conn.sent.length, first, 'ambient chatter leaked in after a broadcast');
+  } finally {
+    await stop();
+  }
+});
+
+test('MATRIX_ROOM_PING=ambient keeps @room out of the addressed path', async () => {
+  const previous = process.env.MATRIX_ROOM_PING;
+  process.env.MATRIX_ROOM_PING = 'ambient';
+  const { conn, emit, stop } = await startServer();
+  try {
+    emit(message({ roomId: GROUP_ROOM, isDM: false, pingsRoom: true, id: '$evt7' }));
+    await new Promise((r) => setTimeout(r, 150));
+    const methods = conn.sent.map((s) => s.method);
+    assert.ok(
+      !methods.includes('channels/incoming'),
+      `@room must stay ambient under this policy; got ${JSON.stringify(methods)}`,
+    );
+  } finally {
+    await stop();
+    if (previous === undefined) delete process.env.MATRIX_ROOM_PING;
+    else process.env.MATRIX_ROOM_PING = previous;
+  }
+});

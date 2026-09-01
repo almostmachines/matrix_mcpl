@@ -8,6 +8,7 @@ import {
   matrixHtmlToText,
   mediaDownloadUrl,
   mentionsUser,
+  pingsRoom,
   parseMxcUrl,
   sanitizeMatrixHtml,
   stripMxReply,
@@ -189,4 +190,26 @@ test('mentionsUser ignores a mention that only appears in the reply fallback', (
     formatted_body: '<mx-reply><blockquote>earlier thing</blockquote></mx-reply>yeah agreed',
   };
   assert.equal(mentionsUser(content, '@bot:example.org'), false);
+});
+
+test('pingsRoom reads m.mentions.room', () => {
+  assert.ok(pingsRoom({ body: 'heads up everyone', 'm.mentions': { room: true } }));
+  assert.equal(pingsRoom({ body: 'heads up everyone', 'm.mentions': { user_ids: ['@bot:example.org'] } }), false);
+});
+
+test('pingsRoom trusts m.mentions over the body when the client set it', () => {
+  // A client that speaks intentional mentions marks a real @room; the same
+  // token in prose is then just text.
+  assert.equal(pingsRoom({ body: 'the @room ping is broken', 'm.mentions': {} }), false);
+});
+
+test('pingsRoom falls back to the body for clients without m.mentions', () => {
+  assert.ok(pingsRoom({ body: '@room deploy is done' }));
+  assert.ok(pingsRoom({ body: 'heads up @room' }));
+  assert.equal(pingsRoom({ body: 'the chatroom is quiet' }), false);
+  assert.equal(pingsRoom({ body: 'ping @roomba instead' }), false);
+});
+
+test('pingsRoom ignores an @room that only appears in the reply fallback', () => {
+  assert.equal(pingsRoom({ body: '> <@john:example.org> @room stand up\n\nack' }), false);
 });

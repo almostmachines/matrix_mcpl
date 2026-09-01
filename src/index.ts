@@ -22,6 +22,11 @@
  *                             subscriptions across restarts
  *   MATRIX_BACKSCROLL_LIMIT - Optional: messages fetched on first interaction
  *                             with a room (default 50)
+ *   MATRIX_ROOM_PING        - Optional: how an @room broadcast is treated —
+ *                             "address" (default: reaches the agent from any
+ *                             room, subscribed or not, tagged chat:addressed),
+ *                             "ambient" or "ignore" (subscribed rooms only,
+ *                             as ordinary chatter)
  *   MATRIX_ACCEPT_NOTICES   - Optional: "true" to deliver m.notice messages
  *                             (default: dropped, as they come from other bots)
  *   MATRIX_PEER_AGENTS      - Optional: comma-separated MXIDs of sibling agents.

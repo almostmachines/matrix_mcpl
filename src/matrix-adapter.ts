@@ -34,6 +34,7 @@ import {
   mediaDownloadUrl,
   mediaThumbnailUrl,
   mentionsUser,
+  pingsRoom,
   stripReplyFallback,
   type AttachmentRef,
   type FetchedAttachment,
@@ -98,7 +99,8 @@ export interface MatrixMessageData {
   mentionIds: string[];
   /** Personal mention of the bot — an @room ping doesn't count. */
   mentionsBot: boolean;
-  /** True when the message carried `m.mentions.room` (the @room broadcast). */
+  /** True when the message carried the `@room` broadcast. The server treats
+   *  this as addressing every agent in the room (see MATRIX_ROOM_PING). */
   pingsRoom: boolean;
   /** True when the sender is a known sibling agent (MATRIX_PEER_AGENTS). */
   isPeerAgent: boolean;
@@ -776,7 +778,6 @@ export class MatrixAdapter {
     const authorName = this.profileCache.get(event.sender) ?? event.sender;
 
     const attachment = attachmentFrom(content);
-    const mentions = content['m.mentions'] as { room?: unknown } | undefined;
 
     const threadRootId =
       relates?.['rel_type'] === 'm.thread' ? (relates['event_id'] as string) : undefined;
@@ -795,9 +796,10 @@ export class MatrixAdapter {
       cleanContent: renderContent(content),
       mentionIds,
       // Personal mention of the bot — hosts use this to gate wake policy.
-      // The @room broadcast deliberately doesn't count.
+      // The @room broadcast deliberately doesn't count as a personal mention;
+      // it travels as pingsRoom and is addressed separately.
       mentionsBot: mentionsUser(content, this.userId, this.displayName),
-      pingsRoom: mentions?.room === true,
+      pingsRoom: pingsRoom(content),
       isPeerAgent: this.config.peerAgents?.includes(event.sender) ?? false,
       isDM,
       msgtype,

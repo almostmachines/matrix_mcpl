@@ -1070,6 +1070,26 @@ export class MatrixMcplServer {
     });
   }
 
+  /** How an `@room` broadcast is treated. Tunable via MATRIX_ROOM_PING:
+   *
+   *  - `address` (default) — `@room` addresses every agent in the room, the
+   *    same as being mentioned personally: delivered even from rooms this
+   *    agent has no ambient subscription to, and tagged `chat:addressed` so
+   *    the host wakes on it.
+   *  - `ambient` — delivered only from subscribed rooms, as ordinary chatter.
+   *  - `ignore` — never addressed; identical to `ambient` today, kept
+   *    distinct so a room full of over-eager broadcasters can be told apart
+   *    from one that simply isn't subscribed.
+   *
+   *  Matrix reserves `@room` for members with the `notifications.room` power
+   *  level (50 by default), so `address` is not an open door for anyone in
+   *  the room — but in a room where everyone has that power, `ambient` keeps
+   *  the agent quiet. */
+  private get roomPingPolicy(): 'address' | 'ambient' | 'ignore' {
+    const raw = process.env.MATRIX_ROOM_PING?.trim().toLowerCase();
+    return raw === 'ambient' || raw === 'ignore' ? raw : 'address';
+  }
+
   /** Whether to carry incoming images inline as image blocks. */
   private get inlineImages(): boolean {
     return process.env.MATRIX_INLINE_IMAGES !== 'false';
@@ -1170,6 +1190,7 @@ export class MatrixMcplServer {
       roomId: msg.roomId,
       authorId: msg.authorId,
       mentionsBot: msg.mentionsBot,
+      pingsRoom: msg.pingsRoom,
       isDM: msg.isDM,
       hasConn: !!conn,
       mcplEnabled: this.mcplEnabled,
@@ -1187,11 +1208,16 @@ export class MatrixMcplServer {
       return;
     }
 
-    // Direct address (mention or DM) always reaches the agent. Ambient
-    // messages only flow from subscribed rooms — otherwise every joined room
-    // would pour unbounded noise into context. The wake decision is the
-    // host's, via the chat:* tags below.
-    const isAddressed = msg.mentionsBot || msg.isDM;
+    // Direct address (mention, DM, or an @room broadcast) always reaches the
+    // agent. Ambient messages only flow from subscribed rooms — otherwise
+    // every joined room would pour unbounded noise into context. The wake
+    // decision is the host's, via the chat:* tags below.
+    //
+    // @room is addressed-to-everyone: it reaches this agent for the same
+    // reason a personal mention does, so an announcement lands even in a room
+    // nobody has ambient-subscribed to.
+    const isRoomPing = msg.pingsRoom && this.roomPingPolicy === 'address';
+    const isAddressed = msg.mentionsBot || msg.isDM || isRoomPing;
     if (!isAddressed && !this.isRoomSubscribed(msg.roomId)) {
       dbg('handleMatrixMessage:drop', { reason: 'ambient-not-subscribed', roomId: msg.roomId });
       return;
@@ -1218,7 +1244,10 @@ export class MatrixMcplServer {
 
       const meta = await this.matrix.getRoomMeta(msg.roomId);
       const blocks: string[] = [];
-      if (!msg.isDM) {
+      // A personal mention says "this room is yours to follow"; an @room
+      // broadcast says only "read this one thing", so it wakes the agent
+      // without signing it up for the room's ambient traffic.
+      if (!msg.isDM && msg.mentionsBot) {
         const where = meta?.alias ?? meta?.name ?? `room ${msg.roomId}`;
         const wasSubscribed = this.subscribedRooms.has(msg.roomId);
         if (!wasSubscribed) {
@@ -1325,7 +1354,8 @@ export class MatrixMcplServer {
       t.add(msg.isPeerAgent ? 'chat:from-agent' : 'chat:from-human');
       if (msg.threadRootId) t.add('chat:thread');
       // @room is RFC-001's channel-wide ping; matrix:room-ping is kept as the
-      // platform extension for gates that want to distinguish it.
+      // platform extension for gates that want to distinguish a broadcast
+      // from a personal mention while still waking on both.
       if (msg.pingsRoom) { t.add('chat:broadcast'); t.add('matrix:room-ping'); }
       for (const a of msg.attachments) {
         t.add(a.isImage ? 'chat:has-image' : 'chat:has-file');
@@ -1341,6 +1371,7 @@ export class MatrixMcplServer {
       threadRootId: msg.threadRootId,
       replyToId: msg.replyToId,
       pingsRoom: msg.pingsRoom,
+      addressedByRoomPing: isRoomPing,
       isPeerAgent: msg.isPeerAgent,
       msgtype: msg.msgtype,
       server: this.matrix.serverName,

@@ -449,6 +449,25 @@ export function extractMentionedUserIds(content: Record<string, unknown>): strin
   return [...ids];
 }
 
+/**
+ * True when `content` carries the `@room` broadcast — the channel-wide ping
+ * that addresses everyone in the room rather than one person.
+ *
+ * `m.mentions` is authoritative when the sending client set it (Matrix 1.7):
+ * a client that speaks intentional mentions marks a real `@room` with
+ * `room: true`, so prose that merely says "@room" is not a ping. Only when
+ * `m.mentions` is absent entirely — an older client — is the body read for a
+ * bare `@room` token. The reply fallback is stripped first, so quoting an
+ * `@room` message does not ping the room again.
+ */
+export function pingsRoom(content: Record<string, unknown>): boolean {
+  const mentions = content['m.mentions'] as { room?: unknown } | undefined;
+  if (mentions && typeof mentions === 'object') return mentions.room === true;
+
+  const body = typeof content.body === 'string' ? stripReplyFallback(content.body) : '';
+  return /(^|[^\w@])@room\b/i.test(body);
+}
+
 /** True when `content` mentions `userId` — via m.mentions, a pill, or (for
  *  clients that do neither) the display name at a word boundary in the body. */
 export function mentionsUser(

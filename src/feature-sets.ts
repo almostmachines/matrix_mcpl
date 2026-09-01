@@ -22,6 +22,8 @@ export const featureSets: FeatureSetDeclaration[] = [
       ],
       defaultTreatment: [
         { tagsAny: ['chat:addressed'], behavior: 'immediate' },
+        // @room addresses everyone present, so it wakes like a mention does.
+        { tagsAny: ['chat:broadcast'], behavior: 'immediate' },
         { tagsAny: ['chat:ambient'], behavior: { throttle: { perMs: 120000 } } },
         // Sibling agents can trade replies faster than any human would; the
         // throttle is the backstop when their judgement about when to stop
